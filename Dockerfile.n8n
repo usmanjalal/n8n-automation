@@ -4,5 +4,6 @@ RUN mkdir -p /home/node/.n8n && chown -R node:node /home/node/.n8n
 USER node
 ENV PORT=10000
 ENV N8N_PORT=10000
+ENV NODE_OPTIONS="--max-old-space-size=400"
 EXPOSE 10000
 CMD ["n8n", "start"]
