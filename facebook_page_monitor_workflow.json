@@ -1,0 +1,298 @@
+{
+  "name": "Facebook Pages Inactivity Monitor -> WhatsApp Group",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-1",
+      "name": "When clicking \u2018Test workflow\u2019",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        },
+        "options": {
+          "timezone": "Asia/Karachi"
+        }
+      },
+      "id": "schedule-trigger-1",
+      "name": "10 AM Karachi Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fb-check-inactivity",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-1",
+      "name": "On-Demand Evo Bot Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        480
+      ],
+      "webhookId": "fb-check-inactivity"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3005/api/fb-check-all",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"pages\": [\n    \"therepairpros\",\n    \"thebakerycafepk\",\n    \"alifschoolandcollege\",\n    \"alifdegreecollege\",\n    \"islepk\",\n    \"Blossomspreschool\",\n    \"TheBritishSchoolMardan\",\n    \"basmaemaargroup\"\n  ]\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "http-fetch-scraper-1",
+      "name": "Fetch Latest Posts (RSS Scraper)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.item.json?.results || [];\n\nlet targetDestination = \"Daily Task Update\";\nlet targetRecipient = \"Daily Task Update\";\n\ntry {\n  const wh = $(\"On-Demand Evo Bot Webhook\").item?.json;\n  if (wh) {\n    targetDestination = wh.groupName || wh.targetDestination || targetDestination;\n    targetRecipient = wh.groupJid || wh.phone || wh.targetRecipient || targetRecipient;\n  }\n} catch (_) {\n  // Safe fallback when triggered manually or by daily schedule\n}\n\nreturn results.map(item => ({\n  json: {\n    page: item.page,\n    page_name: item.page_name,\n    last_post_iso: item.last_post_iso,\n    post_url: item.post_url,\n    targetDestination,\n    targetRecipient\n  }\n}));"
+      },
+      "id": "code-split-pages-1",
+      "name": "Split Pages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ====================================================================\n// EVALUATE 48-HOUR INACTIVITY (ASIA/KARACHI TIME)\n// ====================================================================\nconst item = $input.item.json;\nconst pageName = item.page_name || item.page;\nconst lastPostTime = new Date(item.last_post_iso).getTime();\n\n// Calculate Karachi 2 calendar days cutoff\nconst tz = 'Asia/Karachi';\nconst now = new Date();\nconst karachiDateStr = now.toLocaleDateString('en-CA', { timeZone: tz });\nconst [todayY, todayM, todayD] = karachiDateStr.split('-').map(Number);\n\n// Today 00:00:00 PKT in UTC milliseconds (PKT = UTC+5)\nconst todayStartUtc = Date.UTC(todayY, todayM - 1, todayD, -5, 0, 0);\nconst twoDaysAgoStartUtc = todayStartUtc - (48 * 60 * 60 * 1000);\n\n// Inactive if last post was before 2 calendar days ago\nconst isInactive = lastPostTime < twoDaysAgoStartUtc;\nconst alertMessage = `${pageName} is inactive since 48 hours.`;\n\nreturn {\n  json: {\n    ...item,\n    pageName,\n    is_inactive: isInactive,\n    alertMessage,\n    cutoff_date_karachi: new Date(twoDaysAgoStartUtc).toISOString()\n  }\n};"
+      },
+      "id": "code-eval-inactivity-1",
+      "name": "Evaluate 48-Hour Inactivity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_inactive }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-inactive-1",
+      "name": "Filter: Only Inactive Pages",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const allItems = $input.all();\nif (!allItems || allItems.length === 0) return [];\n\n// Filter strictly to inactive items\nconst items = allItems.filter(it => it.json && it.json.is_inactive === true);\n\n// If no page is inactive for more than 48 hours, return empty array (no message sent)\nif (items.length === 0) return [];\n\nconst recipient = items[0].json.targetRecipient || 'Daily Task Update';\nconst destination = items[0].json.targetDestination || 'Daily Task Update';\n\n// Helper to format Date & Time nicely in Pakistan Time\nfunction formatDateTime(isoString) {\n  try {\n    const d = new Date(isoString);\n    return d.toLocaleString('en-US', {\n      timeZone: 'Asia/Karachi',\n      month: 'short',\n      day: 'numeric',\n      year: 'numeric',\n      hour: 'numeric',\n      minute: '2-digit',\n      hour12: true\n    });\n  } catch (_) {\n    return isoString;\n  }\n}\n\nif (items.length === 1) {\n  const item = items[0].json;\n  const singleMsg = `The following page is inactive for more than 48 hours.\\n${item.pageName}: Last post on ${formatDateTime(item.last_post_iso)}`;\n  return [{\n    json: {\n      pageName: item.pageName,\n      message: singleMsg,\n      targetRecipient: recipient,\n      targetDestination: destination,\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n\nconst pageLines = items.map(it => `${it.json.pageName}: Last post on ${formatDateTime(it.json.last_post_iso)}`);\nconst multiMsg = `The following pages are inactive for more than 48 hours.\\n${pageLines.join('\\n')}`;\n\nreturn [{\n  json: {\n    pageName: `${items.length} Inactive Pages`,\n    message: multiMsg,\n    targetRecipient: recipient,\n    targetDestination: destination,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "code-format-wa-1",
+      "name": "Format WhatsApp Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3005/api/send-whatsapp",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.targetRecipient, message: $json.message }) }}",
+        "options": {
+          "timeout": 8000
+        }
+      },
+      "id": "http-dispatch-wa-1",
+      "name": "Dispatch to WhatsApp (Local Bridge)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        300
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "respond-webhook-1",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================================================\n// \ud83d\udcca RESULTS DASHBOARD & AUDIT TABLE\n// Visualizes all monitored pages, their status, and WhatsApp action\n// ====================================================================\nconst items = $input.all();\n\nconst activeCount = items.filter(i => !i.json.is_inactive).length;\nconst inactiveCount = items.filter(i => i.json.is_inactive).length;\n\nconst rows = items.map((item, idx) => {\n  const d = item.json;\n  const isInactive = d.is_inactive;\n\n  return {\n    json: {\n      \"#\": idx + 1,\n      \"Page Name\": d.pageName,\n      \"Activity Status\": isInactive ? \"\ud83d\udd34 INACTIVE (\u226548h)\" : \"\ud83d\udfe2 ACTIVE (Posted Recently)\",\n      \"Last Post Timestamp\": d.last_post_iso,\n      \"Workflow Action\": isInactive ? \"\ud83d\udcf2 Dispatching WhatsApp Alert\" : \"\u2705 Skipped (Active)\",\n      \"WhatsApp Alert Message\": isInactive ? d.alertMessage : \"\u2014\"\n    }\n  };\n});\n\n// Prepend overall summary card\nrows.unshift({\n  json: {\n    \"#\": \"SUMMARY\",\n    \"Page Name\": `Total Monitored: ${items.length} Pages`,\n    \"Activity Status\": `\ud83d\udfe2 Active: ${activeCount} | \ud83d\udd34 Inactive: ${inactiveCount}`,\n    \"Last Post Timestamp\": new Date().toISOString(),\n    \"Workflow Action\": inactiveCount > 0 ? `Dispatched ${inactiveCount} WhatsApp alerts` : \"All pages active\",\n    \"WhatsApp Alert Message\": \"Check rows below for details\"\n  }\n});\n\nreturn rows;"
+      },
+      "id": "dashboard-node-1",
+      "name": "\ud83d\udcca Results Dashboard (Table View)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        520
+      ]
+    }
+  ],
+  "connections": {
+    "When clicking \u2018Test workflow\u2019": {
+      "main": [
+        [
+          {
+            "node": "Fetch Latest Posts (RSS Scraper)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 AM Karachi Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Latest Posts (RSS Scraper)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On-Demand Evo Bot Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Latest Posts (RSS Scraper)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Latest Posts (RSS Scraper)": {
+      "main": [
+        [
+          {
+            "node": "Split Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Pages": {
+      "main": [
+        [
+          {
+            "node": "Evaluate 48-Hour Inactivity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate 48-Hour Inactivity": {
+      "main": [
+        [
+          {
+            "node": "Filter: Only Inactive Pages",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "\ud83d\udcca Results Dashboard (Table View)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Only Inactive Pages": {
+      "main": [
+        [
+          {
+            "node": "Format WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format WhatsApp Message": {
+      "main": [
+        [
+          {
+            "node": "Dispatch to WhatsApp (Local Bridge)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch to WhatsApp (Local Bridge)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Karachi",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

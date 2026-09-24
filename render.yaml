@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: fb-scraper-service
+    env: docker
+    dockerfilePath: ./fb-scraper-service/Dockerfile
+    dockerContext: ./fb-scraper-service
+    plan: free
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 3005
+      - key: NODE_ENV
+        value: production
+
+  - type: web
+    name: n8n-workflow-server
+    env: docker
+    dockerfilePath: ./Dockerfile.n8n
+    dockerContext: .
+    plan: free
+    region: oregon
+    envVars:
+      - key: N8N_PORT
+        value: 5678
+      - key: N8N_PROTOCOL
+        value: https
+      - key: GENERIC_TIMEZONE
+        value: Asia/Karachi
+      - key: TZ
+        value: Asia/Karachi
+      - key: N8N_SECURE_COOKIE
+        value: "false"
+      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+        value: "true"

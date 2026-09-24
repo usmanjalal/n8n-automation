@@ -1,0 +1,217 @@
+{
+  "id": "fb-page-inactivity-monitor",
+  "name": "Facebook Pages Inactivity Monitor -> WhatsApp Group",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        },
+        "options": {
+          "timezone": "Asia/Karachi"
+        }
+      },
+      "id": "schedule-trigger-1",
+      "name": "10 AM Karachi Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fb-check-inactivity",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger-1",
+      "name": "On-Demand Evo Bot Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        500
+      ],
+      "webhookId": "fb-check-inactivity"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ====================================================================\n// SPECIFIED FACEBOOK PAGES TO MONITOR FOR INACTIVITY\n// Target: Notify at 10 AM Karachi if no post published in last 2 days\n// ====================================================================\nconst targetType = $input.item.json?.targetType || 'group';\nconst targetDestination = $input.item.json?.targetDestination || $input.item.json?.groupName || 'Marketing Team Alerts';\nconst targetGroupId = $input.item.json?.groupJid || $input.item.json?.groupId || '120363024829103948@g.us';\n\n// All requested 8 Facebook Pages:\nconst pages = [\n  {\n    pageName: 'The Repair Pros',\n    url: 'https://www.facebook.com/therepairpros/',\n    pageHandle: 'therepairpros',\n    pageId: 'therepairpros',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'The Bakery Cafe PK',\n    url: 'https://www.facebook.com/thebakerycafepk',\n    pageHandle: 'thebakerycafepk',\n    pageId: 'thebakerycafepk',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'Alif School & College',\n    url: 'https://www.facebook.com/alifschoolandcollege',\n    pageHandle: 'alifschoolandcollege',\n    pageId: 'alifschoolandcollege',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'Alif Degree College',\n    url: 'https://www.facebook.com/alifdegreecollege',\n    pageHandle: 'alifdegreecollege',\n    pageId: 'alifdegreecollege',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'ISLE PK',\n    url: 'https://www.facebook.com/islepk',\n    pageHandle: 'islepk',\n    pageId: 'islepk',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'Blossoms Pre-School',\n    url: 'https://www.facebook.com/Blossomspreschool',\n    pageHandle: 'Blossomspreschool',\n    pageId: 'Blossomspreschool',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'The British School Mardan',\n    url: 'https://www.facebook.com/TheBritishSchoolMardan',\n    pageHandle: 'TheBritishSchoolMardan',\n    pageId: 'TheBritishSchoolMardan',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  },\n  {\n    pageName: 'Basma Emaar Group',\n    url: 'https://www.facebook.com/basmaemaargroup',\n    pageHandle: 'basmaemaargroup',\n    pageId: 'basmaemaargroup',\n    accessToken: '',\n    simulatedLastPostIso: ''\n  }\n];\n\nreturn pages.map(page => ({\n  json: {\n    ...page,\n    targetType,\n    targetDestination,\n    targetGroupId,\n    checkedAt: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "code-pages-list-1",
+      "name": "List of Monitored Facebook Pages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $json.pageId }}/feed?fields=created_time,message&limit=1&access_token={{ $json.accessToken }}",
+        "options": {
+          "timeout": 8000
+        }
+      },
+      "id": "http-fb-feed-1",
+      "name": "Fetch Latest Post (Graph API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        400
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate 2-day inactivity relative to Asia/Karachi calendar days\nconst item = $input.item.json;\nconst pageInfo = $('List of Monitored Facebook Pages').item.json;\nconst pageName = pageInfo.pageName;\nconst targetType = pageInfo.targetType || 'group';\nconst targetDestination = pageInfo.targetDestination || 'Marketing Team Alerts';\nconst targetGroupId = pageInfo.targetGroupId || '120363024829103948@g.us';\n\n// 1. Determine last published post timestamp\nlet lastPostTime = 0;\nif (item.data && Array.isArray(item.data) && item.data.length > 0 && item.data[0].created_time) {\n  lastPostTime = new Date(item.data[0].created_time).getTime();\n} else if (pageInfo.simulatedLastPostIso) {\n  lastPostTime = new Date(pageInfo.simulatedLastPostIso).getTime();\n} else {\n  // If no API token provided yet or empty feed, default to inactive (3 days ago)\n  lastPostTime = Date.now() - (72 * 60 * 60 * 1000);\n}\n\n// 2. Compute Karachi 2-day calendar threshold\n// \"By 2 days I mean, like if nothing has been posted on date 16, and 17. It should message on date 18, 10am. Karachi time.\"\nconst tz = 'Asia/Karachi';\nconst now = new Date();\nconst karachiDateStr = now.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD\nconst [todayY, todayM, todayD] = karachiDateStr.split('-').map(Number);\n\n// Today 00:00:00 PKT in UTC milliseconds (PKT = UTC+5)\nconst todayStartUtc = Date.UTC(todayY, todayM - 1, todayD, -5, 0, 0);\nconst twoDaysAgoStartUtc = todayStartUtc - (48 * 60 * 60 * 1000); // 2 full calendar days prior\n\n// Active if a post was published during Day -2, Day -1, or Today\nconst hasPostedInLast2Days = lastPostTime >= twoDaysAgoStartUtc;\nconst isInactive = !hasPostedInLast2Days;\n\n// Requested exact message format:\n// <Page name> is inactive since 48 hours.\nconst alertMessage = `${pageName} is inactive since 48 hours.`;\n\nreturn [{\n  json: {\n    pageName,\n    url: pageInfo.url,\n    pageHandle: pageInfo.pageHandle,\n    lastPostTime: new Date(lastPostTime).toISOString(),\n    isInactive,\n    alertMessage,\n    targetType,\n    targetDestination,\n    targetGroupId,\n    checkedDateKarachi: karachiDateStr\n  }\n}];"
+      },
+      "id": "code-calc-inactivity-1",
+      "name": "Evaluate 2-Day Inactivity (Karachi Time)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isInactive }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-is-inactive-1",
+      "name": "Filter: Inactive in Last 2 Days?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nreturn [{\n  json: {\n    success: true,\n    status: 'ALERT_TRIGGERED',\n    pageName: item.pageName,\n    pageUrl: item.url,\n    message: item.alertMessage,\n    targetType: item.targetType,\n    targetDestination: item.targetDestination,\n    groupName: item.targetDestination,\n    groupJid: item.targetGroupId,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "format-group-alert-1",
+      "name": "Format WhatsApp Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "respond-webhook-1",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1600,
+        340
+      ]
+    }
+  ],
+  "connections": {
+    "10 AM Karachi Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "List of Monitored Facebook Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On-Demand Evo Bot Webhook": {
+      "main": [
+        [
+          {
+            "node": "List of Monitored Facebook Pages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List of Monitored Facebook Pages": {
+      "main": [
+        [
+          {
+            "node": "Fetch Latest Post (Graph API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Latest Post (Graph API)": {
+      "main": [
+        [
+          {
+            "node": "Evaluate 2-Day Inactivity (Karachi Time)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate 2-Day Inactivity (Karachi Time)": {
+      "main": [
+        [
+          {
+            "node": "Filter: Inactive in Last 2 Days?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: Inactive in Last 2 Days?": {
+      "main": [
+        [
+          {
+            "node": "Format WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format WhatsApp Message": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
