@@ -20,6 +20,12 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// Health check endpoint for Render & Docker
+app.get('/healthz', (req, res) => res.json({ status: 'ok', service: 'fb-scraper-service', time: new Date().toISOString() }));
+
+// Root redirect directly to Ultra Ops Dashboard
+app.get('/', (req, res) => res.redirect('/live'));
+
 const PORT = process.env.PORT || 3005;
 
 // Central Audit Log Ring Buffer (Max 200 events)
@@ -377,6 +383,21 @@ app.post('/api/save-cookies', (req, res) => {
 });
 
 // API to get full audit logs
+// Proxy health check for cloud n8n
+app.get('/api/n8n/health', async (req, res) => {
+  const n8nUrl = process.env.N8N_URL || 'https://n8n-server-lp44.onrender.com';
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const r = await fetch(`${n8nUrl}/healthz`, { signal: controller.signal });
+    clearTimeout(timeout);
+    const data = await r.json().catch(() => ({}));
+    res.json({ online: r.ok, url: n8nUrl, status: r.status, data });
+  } catch (err) {
+    res.json({ online: false, url: n8nUrl, error: err.message });
+  }
+});
+
 app.get('/api/telemetry/logs', (req, res) => {
   res.json({
     totalLogs: AUDIT_LOGS.length,
@@ -630,6 +651,130 @@ app.get('/live', (req, res) => {
     .stat-val { font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace; margin: 4px 0 2px; }
     .stat-sub { font-size: 12px; color: var(--text-faint); display: flex; align-items: center; gap: 6px; }
 
+    
+    /* Realtime Node Topology & Connection Map */
+    .topology-container {
+      background: #080d1a;
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    }
+    .topology-title-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .topology-grid {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: relative;
+      overflow-x: auto;
+      padding: 8px 4px;
+    }
+    @media (max-width: 992px) {
+      .topology-grid {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .topo-arrow {
+        transform: rotate(90deg);
+        margin: 6px auto;
+      }
+    }
+    .topo-node {
+      flex: 1;
+      min-width: 200px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 12px 14px;
+      transition: all 0.25s ease;
+      position: relative;
+    }
+    .topo-node.active {
+      border-color: #10b981;
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+    }
+    .topo-node.idle {
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+    }
+    .topo-node.disconnected {
+      border-color: #ef4444;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+    }
+    .topo-node-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .topo-node-name {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .topo-status-pill {
+      font-size: 9.5px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .pill-green { background: #064e3b; color: #6ee7b7; border: 1px solid #10b981; }
+    .pill-cyan { background: #0c4a6e; color: #7dd3fc; border: 1px solid #38bdf8; }
+    .pill-amber { background: #78350f; color: #fde68a; border: 1px solid #f59e0b; }
+    .pill-red { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+    
+    .topo-node-meta {
+      font-size: 11px;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+    .topo-node-endpoint {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 4px;
+      word-break: break-all;
+    }
+    .topo-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #475569;
+      flex-shrink: 0;
+      gap: 2px;
+    }
+    .topo-arrow.active {
+      color: #10b981;
+      animation: arrowPulse 1.5s infinite;
+    }
+    .topo-arrow-label {
+      font-size: 9px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    @keyframes arrowPulse {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+
     /* Dashboard Main Two-Column Layout */
     .dashboard-layout {
       display: grid;
@@ -876,6 +1021,95 @@ app.get('/live', (req, res) => {
     </div>
   </div>
 
+  
+  <!-- Real-Time Interactive Connection Topology -->
+  <div class="topology-container">
+    <div class="topology-title-bar">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        <span style="font-weight: 700; font-size: 12.5px; letter-spacing: 0.4px; color: #f8fafc;">LIVE CONNECTION TOPOLOGY & MESH STATUS</span>
+        <span class="pulse-dot" style="width: 6px; height: 6px;"></span>
+      </div>
+      <div style="font-size: 11px; color: #94a3b8;">
+        Continuous bidirectional ping & latency sync
+      </div>
+    </div>
+
+    <div class="topology-grid">
+      
+      <!-- Node 1: Cloud n8n Workflow Server -->
+      <div class="topo-node" id="topoN8n">
+        <div class="topo-node-header">
+          <div class="topo-node-name">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            n8n Cloud Engine
+          </div>
+          <span class="topo-status-pill pill-cyan" id="topoN8nPill">CHECKING</span>
+        </div>
+        <div class="topo-node-meta" id="topoN8nMeta">Workflow: 10 AM PKT / Webhook</div>
+        <div class="topo-node-endpoint">n8n-server-lp44.onrender.com</div>
+      </div>
+
+      <!-- Arrow 1 -->
+      <div class="topo-arrow active">
+        <span class="topo-arrow-label">POST /api/fb-check-all</span>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <!-- Node 2: Scraper Microservice (This Hub) -->
+      <div class="topo-node active" id="topoScraper">
+        <div class="topo-node-header">
+          <div class="topo-node-name">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+            Scraper & Bridge Hub
+          </div>
+          <span class="topo-status-pill pill-green">LIVE HUB</span>
+        </div>
+        <div class="topo-node-meta" id="topoScraperMeta">Puppeteer Stealth • Port 10000</div>
+        <div class="topo-node-endpoint">fb-scraper-service.onrender.com</div>
+      </div>
+
+      <!-- Arrow 2 -->
+      <div class="topo-arrow active" id="topoArrowQueue">
+        <span class="topo-arrow-label" id="topoArrowQueueLabel">GET /api/pending-alerts</span>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <!-- Node 3: WhatsApp Web Extension -->
+      <div class="topo-node" id="topoExt">
+        <div class="topo-node-header">
+          <div class="topo-node-name">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            ChatStage Extension
+          </div>
+          <span class="topo-status-pill pill-amber" id="topoExtPill">WAITING</span>
+        </div>
+        <div class="topo-node-meta" id="topoExtMeta">WhatsApp Web Chrome Client</div>
+        <div class="topo-node-endpoint" id="topoExtEndpoint">Polling Cloud Service</div>
+      </div>
+
+      <!-- Arrow 3 -->
+      <div class="topo-arrow active">
+        <span class="topo-arrow-label">DOM Automation</span>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+
+      <!-- Node 4: WhatsApp Group Recipient -->
+      <div class="topo-node" id="topoTarget">
+        <div class="topo-node-header">
+          <div class="topo-node-name">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            WhatsApp Destination
+          </div>
+          <span class="topo-status-pill pill-cyan" id="topoTargetPill">TARGET</span>
+        </div>
+        <div class="topo-node-meta" id="topoTargetMeta">Daily Task Update / +923349003849</div>
+        <div class="topo-node-endpoint">48h Inactivity Alert Dispatch</div>
+      </div>
+
+    </div>
+  </div>
+
   <!-- Live Terminal Console -->
   <div class="terminal-wrapper">
     <div class="terminal-bar">
@@ -1059,6 +1293,10 @@ app.get('/live', (req, res) => {
         // 4. Render Audit Table
         renderTableLogs();
 
+        // 5. Update Connection Topology Real-time Status
+        updateTopologyStatus(data);
+
+
       } catch (err) {
         console.error('Fetch telemetry failed:', err);
       }
@@ -1212,7 +1450,7 @@ app.get('/live', (req, res) => {
       btn.disabled = true;
       btn.innerHTML = 'Executing...';
       try {
-        await fetch('http://localhost:5678/webhook/fb-check-inactivity', {
+        await fetch('https://n8n-server-lp44.onrender.com/webhook/fb-check-inactivity', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ trigger: 'manual_ultra_dashboard' })
@@ -1276,6 +1514,85 @@ app.get('/live', (req, res) => {
     function clearTerminal() {
       document.getElementById('terminalOutput').innerHTML = '<div style="color: #64748b;">Terminal cleared. Waiting for events...</div>';
       seenTerminalIds.clear();
+    }
+
+    
+    let lastN8nCheck = 0;
+    let n8nIsOnline = true;
+
+    async function checkN8nHealth() {
+      const now = Date.now();
+      if (now - lastN8nCheck < 5000) return;
+      lastN8nCheck = now;
+      try {
+        const res = await fetch('/api/n8n/health');
+        const data = await res.json();
+        n8nIsOnline = Boolean(data.online);
+        const node = document.getElementById('topoN8n');
+        const pill = document.getElementById('topoN8nPill');
+        const meta = document.getElementById('topoN8nMeta');
+        if (n8nIsOnline) {
+          node.className = 'topo-node active';
+          pill.className = 'topo-status-pill pill-green';
+          pill.innerText = 'ONLINE (200)';
+          meta.innerText = 'Render Cloud Workflow Ready';
+        } else {
+          node.className = 'topo-node disconnected';
+          pill.className = 'topo-status-pill pill-red';
+          pill.innerText = 'OFFLINE';
+          meta.innerText = data.error || 'Connection Failed';
+        }
+      } catch {
+        // silent
+      }
+    }
+
+    function updateTopologyStatus(data) {
+      checkN8nHealth();
+
+      // Extension Node
+      const extLogs = allLogsCache.filter(l => l.source === 'whatsapp_extension');
+      const extNode = document.getElementById('topoExt');
+      const extPill = document.getElementById('topoExtPill');
+      const extMeta = document.getElementById('topoExtMeta');
+      const extEndpoint = document.getElementById('topoExtEndpoint');
+
+      if (extLogs.length > 0) {
+        const latest = extLogs[0];
+        const secAgo = Math.round((Date.now() - new Date(latest.iso).getTime()) / 1000);
+        if (secAgo < 10) {
+          extNode.className = 'topo-node active';
+          extPill.className = 'topo-status-pill pill-green';
+          extPill.innerText = 'CONNECTED';
+          extMeta.innerText = 'Active on WhatsApp Web (' + secAgo + 's ago)';
+        } else {
+          extNode.className = 'topo-node idle';
+          extPill.className = 'topo-status-pill pill-amber';
+          extPill.innerText = 'IDLE (' + secAgo + 's)';
+          extMeta.innerText = 'Last heartbeat at ' + latest.time;
+        }
+
+        const heartbeat = extLogs.find(l => l.details && l.details.activeChat !== undefined);
+        if (heartbeat) {
+          extEndpoint.innerText = 'Chat: ' + (heartbeat.details.activeChat || 'None');
+        }
+      } else {
+        extNode.className = 'topo-node disconnected';
+        extPill.className = 'topo-status-pill pill-red';
+        extPill.innerText = 'OFFLINE';
+        extMeta.innerText = 'Extension not active on WhatsApp Web';
+      }
+
+      // Queue Arrow
+      const qCount = data.pendingAlertsCount || 0;
+      const arrowLabel = document.getElementById('topoArrowQueueLabel');
+      if (qCount > 0) {
+        arrowLabel.innerText = 'DISPATCHING (' + qCount + ' QUEUED)';
+        arrowLabel.style.color = '#38bdf8';
+      } else {
+        arrowLabel.innerText = 'IDLE (0 QUEUED)';
+        arrowLabel.style.color = '#94a3b8';
+      }
     }
 
     // Startup
