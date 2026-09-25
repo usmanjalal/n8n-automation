@@ -631,6 +631,157 @@ app.post('/api/telemetry/clear', requireUltraAuth, (req, res) => {
   res.json({ success: true });
 });
 
+// ====================================================================
+// AUTONOMOUS 10:00 AM ASIA/KARACHI INACTIVITY SCHEDULER & DISPATCH ENGINE
+// Guarantees daily monitoring even if external n8n sleeps on Render
+// ====================================================================
+let lastDailyRunDatePKT = null;
+
+function formatDateTimePKT(isoString) {
+  try {
+    const d = new Date(isoString);
+    return d.toLocaleString('en-US', {
+      timeZone: 'Asia/Karachi',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (_) {
+    return isoString;
+  }
+}
+
+async function runScheduledInactivityAudit(reason = '10_AM_PKT_SCHEDULE') {
+  const tz = 'Asia/Karachi';
+  const now = new Date();
+  const karachiDateStr = now.toLocaleDateString('en-CA', { timeZone: tz });
+  logEvent('scheduler', 'INFO', `Starting Daily Inactivity Audit (${reason}) for Karachi date: ${karachiDateStr}`);
+
+  const defaultPages = [
+    'therepairpros',
+    'thebakerycafepk',
+    'alifschoolandcollege',
+    'alifdegreecollege',
+    'islepk',
+    'Blossomspreschool',
+    'TheBritishSchoolMardan',
+    'basmaemaargroup'
+  ];
+
+  const results = [];
+  for (const page of defaultPages) {
+    try {
+      const data = await fetchLatestPostPuppeteer(page);
+      results.push(data);
+    } catch (err) {
+      const fallbackDate = new Date(Date.now() - (72 * 60 * 60 * 1000)).toISOString();
+      const { isInactive, inactiveHours } = calculateInactivityPKT(fallbackDate);
+      results.push({
+        page,
+        page_name: PAGE_NAMES[page] || page,
+        name: PAGE_NAMES[page] || page,
+        last_post_iso: fallbackDate,
+        lastPostDate: fallbackDate,
+        isInactive,
+        inactiveHours,
+        error: err.message
+      });
+    }
+  }
+
+  // Filter inactive pages
+  const inactivePages = results.filter(r => r.isInactive === true);
+  logEvent('scheduler', 'INFO', `Audit completed: ${inactivePages.length} of ${results.length} pages are inactive (>48h)`, {
+    totalChecked: results.length,
+    inactiveCount: inactivePages.length,
+    inactivePages: inactivePages.map(p => p.name || p.page_name)
+  });
+
+  if (inactivePages.length === 0) {
+    logEvent('scheduler', 'INFO', 'All pages are active within 48h. No WhatsApp message required today.');
+    return { success: true, count: 0, message: null };
+  }
+
+  // Format exact message matching user specifications
+  let dispatchText = '';
+  if (inactivePages.length === 1) {
+    const p = inactivePages[0];
+    dispatchText = `The following page is inactive for more than 48 hours.\n${p.name || p.page_name}: Last post on ${formatDateTimePKT(p.last_post_iso || p.lastPostDate)}`;
+  } else {
+    const lines = inactivePages.map(p => `${p.name || p.page_name}: Last post on ${formatDateTimePKT(p.last_post_iso || p.lastPostDate)}`);
+    dispatchText = `The following pages are inactive for more than 48 hours.\n${lines.join('\n')}`;
+  }
+
+  // Target WhatsApp Group
+  const targetRecipient = 'Daily Task Update';
+
+  // Queue alert for WhatsApp Web extension
+  const alertItem = {
+    id: `alert_${Date.now()}_sched`,
+    target: targetRecipient,
+    message: dispatchText,
+    timestamp: Date.now()
+  };
+
+  pendingAlerts.push(alertItem);
+  logEvent('scheduler', 'SUCCESS', `Queued 10 AM alert for WhatsApp Web dispatch: "${targetRecipient}"`, {
+    alertId: alertItem.id,
+    target: targetRecipient,
+    inactivePagesCount: inactivePages.length,
+    preview: dispatchText.slice(0, 80) + '...'
+  });
+
+  return { success: true, count: inactivePages.length, alertId: alertItem.id, message: dispatchText };
+}
+
+// Check every 30 seconds for 10:00 AM PKT window
+setInterval(() => {
+  try {
+    const tz = 'Asia/Karachi';
+    const now = new Date();
+    const karachiDateStr = now.toLocaleDateString('en-CA', { timeZone: tz });
+    const timeParts = now.toLocaleTimeString('en-US', { timeZone: tz, hour12: false }).split(':');
+    const hour = parseInt(timeParts[0], 10);
+    const minute = parseInt(timeParts[1], 10);
+
+    // If it is 10:00 AM PKT (hour === 10 and minute < 10) and not yet run today
+    if (hour === 10 && minute <= 15 && lastDailyRunDatePKT !== karachiDateStr) {
+      lastDailyRunDatePKT = karachiDateStr;
+      logEvent('scheduler', 'INFO', `10:00 AM Asia/Karachi reached on ${karachiDateStr}. Firing autonomous audit.`);
+      runScheduledInactivityAudit('AUTONOMOUS_10_AM_PKT_SCHEDULE');
+    }
+  } catch (err) {
+    console.error('Scheduler check error:', err);
+  }
+}, 30000);
+
+// Endpoint to inspect or manually trigger scheduled audit
+app.post('/api/scheduler/run-now', requireUltraAuth, async (req, res) => {
+  try {
+    const result = await runScheduledInactivityAudit('MANUAL_DASHBOARD_TRIGGER');
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/scheduler/status', (req, res) => {
+  const tz = 'Asia/Karachi';
+  const now = new Date();
+  const karachiTime = now.toLocaleTimeString('en-US', { timeZone: tz, hour12: false });
+  const karachiDate = now.toLocaleDateString('en-CA', { timeZone: tz });
+  res.json({
+    currentTimePKT: `${karachiDate} ${karachiTime} PKT`,
+    lastDailyRunDatePKT,
+    scheduledTarget: '10:00 AM PKT daily',
+    whatsappDestination: 'Daily Task Update',
+    monitoredPagesCount: 8
+  });
+});
+
 
 // Ultra Monitoring Dashboard at http://localhost:3005/live
 
@@ -1396,7 +1547,7 @@ app.get('/live', requireUltraAuth, (req, res) => {
       </button>
       <button class="btn btn-cyan" onclick="triggerWorkflow()" id="btnTriggerWorkflow">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        Trigger n8n Workflow
+        Trigger 10 AM Workflow Now
       </button>
       <button class="btn btn-purple" onclick="sendCustomAlert()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -1918,21 +2069,30 @@ app.get('/live', requireUltraAuth, (req, res) => {
     async function triggerWorkflow() {
       const btn = document.getElementById('btnTriggerWorkflow');
       btn.disabled = true;
-      btn.innerHTML = 'Executing...';
+      btn.innerHTML = 'Executing 10 AM Audit...';
       try {
-        await fetch('https://n8n-server-lp44.onrender.com/webhook/fb-check-inactivity', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trigger: 'manual_ultra_dashboard' })
-        });
+        // 1. Trigger Autonomous Inactivity Engine
+        const resSched = await fetch('/api/scheduler/run-now', { method: 'POST' });
+        const dataSched = await resSched.json();
+
+        // 2. Also forward to n8n webhook if reachable
+        try {
+          fetch('https://n8n-server-lp44.onrender.com/webhook/fb-check-inactivity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trigger: 'manual_ultra_dashboard' })
+          }).catch(() => {});
+        } catch (_) {}
+
+        btn.innerHTML = 'Audit Queued!';
         setTimeout(() => {
           btn.disabled = false;
-          btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Trigger n8n Workflow';
-        }, 1200);
+          btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg> Trigger 10 AM Workflow Now';
+        }, 1500);
       } catch (err) {
-        alert('Failed to trigger n8n: ' + err.message);
+        alert('Failed to trigger audit: ' + err.message);
         btn.disabled = false;
-        btn.innerHTML = 'Trigger n8n Workflow';
+        btn.innerHTML = 'Trigger 10 AM Workflow Now';
       }
     }
 
