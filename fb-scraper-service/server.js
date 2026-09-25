@@ -25,6 +25,8 @@ app.use((req, res, next) => {
 // ====================================================================
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AdminUltraOps2026!';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+// Hardware lock key unique to user's MacBook (IOPlatformUUID: 501097F2-596F-5EE2-8199-BA420E9CAA0D)
+const ALLOWED_DEVICE_KEY = process.env.ALLOWED_DEVICE_KEY || 'a6a43f1bcdd1eb47a68280a3320df2a4c603e9ed4dcf6d8a531a7bdb5acf6f54';
 const ACTIVE_SESSIONS = new Map(); // sessionId -> { expiresAt, ip }
 const LOGIN_ATTEMPTS = new Map(); // ip -> { count, lockedUntil }
 
@@ -83,6 +85,16 @@ function requireUltraAuth(req, res, next) {
     if (token === ADMIN_PASSWORD) {
       return next();
     }
+  }
+
+  // Hardware Lock: Check URL query parameter ?device_key=... and pair device cookie
+  if (req.query && req.query.device_key === ALLOWED_DEVICE_KEY) {
+    res.cookie('ultra_device_paired', ALLOWED_DEVICE_KEY, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: 365 * 24 * 60 * 60 * 1000 // 1 year pairing
+    });
   }
 
   // If requesting /live or page, redirect or render login screen
@@ -602,10 +614,11 @@ app.post('/api/telemetry/clear', requireUltraAuth, (req, res) => {
 
 // Ultra Monitoring Dashboard at http://localhost:3005/live
 
-// Login endpoint with rate limiting & brute-force lock
+// Login endpoint with rate limiting & brute-force lock & Hardware Device Locking
 app.post('/api/auth/login', (req, res) => {
   const ip = getClientIp(req);
   const now = Date.now();
+  const cookies = parseCookies(req);
 
   // Check rate limit (Max 5 attempts in 15 mins)
   const attempt = LOGIN_ATTEMPTS.get(ip) || { count: 0, lockedUntil: 0 };
@@ -616,6 +629,18 @@ app.post('/api/auth/login', (req, res) => {
       success: false,
       error: 'TOO_MANY_ATTEMPTS',
       message: `Too many failed attempts. Access locked for ${minutesLeft} minute(s).`
+    });
+  }
+
+  // 1. Hardware Lock: Device Pairing Key Verification
+  // Must match the paired cookie or device key sent from authorized MacBook
+  const effectiveDeviceKey = req.body?.deviceKey || cookies['ultra_device_paired'];
+  if (effectiveDeviceKey !== ALLOWED_DEVICE_KEY) {
+    logEvent('security', 'ERROR', `Unauthorized device attempt from IP ${ip} (Hardware lock rejected)`);
+    return res.status(403).json({
+      success: false,
+      error: 'DEVICE_UNAUTHORIZED',
+      message: 'Access Denied: This console is locked strictly to the owner MacBook device.'
     });
   }
 
@@ -836,28 +861,36 @@ function getLoginHtml() {
   </div>
 
   <script>
+    // If device_key is present in query parameters, persist in localStorage on this device
+    const urlParams = new URLSearchParams(window.location.search);
+    const queryKey = urlParams.get('device_key');
+    if (queryKey) {
+      localStorage.setItem('ultra_device_key', queryKey);
+    }
+
     async function handleLogin(e) {
       e.preventDefault();
       const pw = document.getElementById('password').value;
       const btn = document.getElementById('loginBtn');
       const errBox = document.getElementById('errorMsg');
+      const deviceKey = localStorage.getItem('ultra_device_key') || queryKey;
 
       errBox.style.display = 'none';
       btn.disabled = true;
-      btn.innerHTML = 'Verifying...';
+      btn.innerHTML = 'Verifying Hardware & Credentials...';
 
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pw })
+          body: JSON.stringify({ password: pw, deviceKey: deviceKey || undefined })
         });
         const data = await res.json();
         if (data.success) {
           // Success! Reload page to enter dashboard
           window.location.reload();
         } else {
-          errBox.innerText = data.message || 'Invalid password.';
+          errBox.innerText = data.message || 'Access Denied: Invalid credentials or unauthorized device.';
           errBox.style.display = 'block';
           btn.disabled = false;
           btn.innerHTML = 'Authenticate & Enter';
