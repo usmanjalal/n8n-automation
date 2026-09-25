@@ -67,47 +67,9 @@ function isValidSessionId(sessionId, ip) {
   return true;
 }
 
-// Authentication & Session Guard Middleware for /live and admin APIs
+// Authentication & Session Guard Middleware (Password authentication removed for local usage)
 function requireUltraAuth(req, res, next) {
-  const ip = getClientIp(req);
-  const cookies = parseCookies(req);
-  const sessionId = cookies['ultra_session'] || req.headers['x-ultra-session'];
-
-  // Check valid active session
-  if (isValidSessionId(sessionId, ip)) {
-    return next();
-  }
-
-  // Allow bypass with direct Authorization Bearer token matching ADMIN_PASSWORD
-  const authHeader = req.headers['authorization'];
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    if (token === ADMIN_PASSWORD) {
-      return next();
-    }
-  }
-
-  // Hardware Lock: Check URL query parameter ?device_key=... and pair device cookie
-  if (req.query && req.query.device_key === ALLOWED_DEVICE_KEY) {
-    res.cookie('ultra_device_paired', ALLOWED_DEVICE_KEY, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
-      maxAge: 365 * 24 * 60 * 60 * 1000 // 1 year pairing
-    });
-  }
-
-  // If requesting /live or page, redirect or render login screen
-  if (req.path === '/live' || req.method === 'GET') {
-    return res.send(getLoginHtml());
-  }
-
-  // If calling API without session, return 401 Unauthorized
-  return res.status(401).json({
-    success: false,
-    error: 'UNAUTHORIZED',
-    message: 'Ultra Ops session expired or invalid. Please log in at /live'
-  });
+  return next();
 }
 
 app.use(express.json());
@@ -1553,10 +1515,6 @@ app.get('/live', requireUltraAuth, (req, res) => {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Send Test WhatsApp
       </button>
-      <button class="btn btn-danger" onclick="logoutSession()" title="Lock Console & Invalidate Session">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Lock Console
-      </button>
     </div>
   </div>
 
@@ -1613,7 +1571,7 @@ app.get('/live', requireUltraAuth, (req, res) => {
           <span class="topo-status-pill pill-green">LIVE HUB</span>
         </div>
         <div class="topo-node-meta" id="topoScraperMeta">Puppeteer Stealth • 10 AM PKT Cron Built-in</div>
-        <div class="topo-node-endpoint">fb-scraper-service.onrender.com</div>
+        <div class="topo-node-endpoint">http://localhost:3005 (Local / Air-Gapped)</div>
       </div>
 
       <!-- Arrow 1 -->
