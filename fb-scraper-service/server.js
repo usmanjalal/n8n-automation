@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
@@ -17,6 +18,85 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+
+// ====================================================================
+// ULTRA OPS SECURITY: MASTER PASSWORD, SESSION SESSIONS, & BRUTE FORCE GUARD
+// ====================================================================
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AdminUltraOps2026!';
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const ACTIVE_SESSIONS = new Map(); // sessionId -> { expiresAt, ip }
+const LOGIN_ATTEMPTS = new Map(); // ip -> { count, lockedUntil }
+
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+}
+
+function parseCookies(req) {
+  const list = {};
+  const rc = req.headers.cookie;
+  if (!rc) return list;
+  rc.split(';').forEach(cookie => {
+    const parts = cookie.split('=');
+    const name = parts.shift().trim();
+    if (name) list[name] = decodeURI(parts.join('='));
+  });
+  return list;
+}
+
+function generateSessionId(ip) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const signature = crypto.createHmac('sha256', SESSION_SECRET).update(`${token}:${ip}`).digest('hex');
+  return `${token}.${signature}`;
+}
+
+function isValidSessionId(sessionId, ip) {
+  if (!sessionId || !sessionId.includes('.')) return false;
+  const [token, signature] = sessionId.split('.');
+  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(`${token}:${ip}`).digest('hex');
+  if (signature !== expectedSig) return false;
+  
+  const sess = ACTIVE_SESSIONS.get(sessionId);
+  if (!sess) return false;
+  if (Date.now() > sess.expiresAt) {
+    ACTIVE_SESSIONS.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
+// Authentication & Session Guard Middleware for /live and admin APIs
+function requireUltraAuth(req, res, next) {
+  const ip = getClientIp(req);
+  const cookies = parseCookies(req);
+  const sessionId = cookies['ultra_session'] || req.headers['x-ultra-session'];
+
+  // Check valid active session
+  if (isValidSessionId(sessionId, ip)) {
+    return next();
+  }
+
+  // Allow bypass with direct Authorization Bearer token matching ADMIN_PASSWORD
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token === ADMIN_PASSWORD) {
+      return next();
+    }
+  }
+
+  // If requesting /live or page, redirect or render login screen
+  if (req.path === '/live' || req.method === 'GET') {
+    return res.send(getLoginHtml());
+  }
+
+  // If calling API without session, return 401 Unauthorized
+  return res.status(401).json({
+    success: false,
+    error: 'UNAUTHORIZED',
+    message: 'Ultra Ops session expired or invalid. Please log in at /live'
+  });
+}
 
 app.use(express.json());
 
@@ -389,7 +469,7 @@ app.post('/api/save-cookies', (req, res) => {
 
 // API to get full audit logs
 // Proxy health check for cloud n8n
-app.get('/api/n8n/health', async (req, res) => {
+app.get(requireUltraAuth, '/api/n8n/health', async (req, res) => {
   const n8nUrl = process.env.N8N_URL || 'https://n8n-server-lp44.onrender.com';
   try {
     const controller = new AbortController();
@@ -403,7 +483,7 @@ app.get('/api/n8n/health', async (req, res) => {
   }
 });
 
-app.get('/api/telemetry/logs', (req, res) => {
+app.get(requireUltraAuth, '/api/telemetry/logs', (req, res) => {
   res.json({
     totalLogs: AUDIT_LOGS.length,
     pendingAlertsCount: pendingAlerts.length,
@@ -492,7 +572,7 @@ app.post('/api/pending-alerts/ack', (req, res) => {
 });
 
 // Delete specific alert from queue
-app.post('/api/pending-alerts/delete', (req, res) => {
+app.post(requireUltraAuth, '/api/pending-alerts/delete', (req, res) => {
   const { id } = req.body;
   const idx = pendingAlerts.findIndex(a => a.id === id);
   if (idx !== -1) {
@@ -505,7 +585,7 @@ app.post('/api/pending-alerts/delete', (req, res) => {
 });
 
 // Clear entire pending alert queue
-app.post('/api/pending-alerts/clear', (req, res) => {
+app.post(requireUltraAuth, '/api/pending-alerts/clear', (req, res) => {
   const count = pendingAlerts.length;
   pendingAlerts.length = 0;
   logEvent('user', 'WARN', `Cleared ${count} pending alert(s) from queue`);
@@ -513,7 +593,7 @@ app.post('/api/pending-alerts/clear', (req, res) => {
 });
 
 // Clear telemetry log buffer
-app.post('/api/telemetry/clear', (req, res) => {
+app.post(requireUltraAuth, '/api/telemetry/clear', (req, res) => {
   AUDIT_LOGS.length = 0;
   logEvent('user', 'INFO', 'Telemetry log buffer cleared');
   res.json({ success: true });
@@ -521,7 +601,280 @@ app.post('/api/telemetry/clear', (req, res) => {
 
 
 // Ultra Monitoring Dashboard at http://localhost:3005/live
-app.get('/live', (req, res) => {
+
+// Login endpoint with rate limiting & brute-force lock
+app.post('/api/auth/login', (req, res) => {
+  const ip = getClientIp(req);
+  const now = Date.now();
+
+  // Check rate limit (Max 5 attempts in 15 mins)
+  const attempt = LOGIN_ATTEMPTS.get(ip) || { count: 0, lockedUntil: 0 };
+  if (attempt.lockedUntil > now) {
+    const minutesLeft = Math.ceil((attempt.lockedUntil - now) / 60000);
+    logEvent('security', 'WARN', `Blocked login attempt from locked IP ${ip}`, { minutesLeft });
+    return res.status(429).json({
+      success: false,
+      error: 'TOO_MANY_ATTEMPTS',
+      message: `Too many failed attempts. Access locked for ${minutesLeft} minute(s).`
+    });
+  }
+
+  const { password } = req.body || {};
+  if (!password || password !== ADMIN_PASSWORD) {
+    attempt.count += 1;
+    if (attempt.count >= 5) {
+      attempt.lockedUntil = now + (15 * 60 * 1000); // 15 min lock
+      logEvent('security', 'ERROR', `IP ${ip} locked for 15 minutes due to 5 failed login attempts`);
+    } else {
+      LOGIN_ATTEMPTS.set(ip, attempt);
+      logEvent('security', 'WARN', `Failed login attempt (${attempt.count}/5) from ${ip}`);
+    }
+    return res.status(401).json({
+      success: false,
+      error: 'INVALID_CREDENTIALS',
+      message: `Incorrect Master Password (${5 - attempt.count} attempt(s) remaining).`
+    });
+  }
+
+  // Login Successful: Reset attempts and issue 12-hour session
+  LOGIN_ATTEMPTS.delete(ip);
+  const sessionId = generateSessionId(ip);
+  const expiresAt = now + (12 * 60 * 60 * 1000); // 12 hours
+  ACTIVE_SESSIONS.set(sessionId, { expiresAt, ip });
+
+  logEvent('security', 'SUCCESS', `Ultra Ops authorized session opened from ${ip}`);
+
+  // Secure HTTP-Only Cookie
+  res.cookie('ultra_session', sessionId, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    maxAge: 12 * 60 * 60 * 1000
+  });
+
+  res.json({
+    success: true,
+    message: 'Authenticated successfully',
+    sessionId,
+    expiresAt
+  });
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  const ip = getClientIp(req);
+  const cookies = parseCookies(req);
+  const sessionId = cookies['ultra_session'];
+  if (sessionId) {
+    ACTIVE_SESSIONS.delete(sessionId);
+  }
+  logEvent('security', 'INFO', `Session logged out from ${ip}`);
+  res.clearCookie('ultra_session');
+  res.json({ success: true });
+});
+
+// Login HTML Page generator
+function getLoginHtml() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ultra Ops Console — Secure Authentication</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #080d1a;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .login-card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 16px;
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.7), 0 0 20px rgba(56, 189, 248, 0.1);
+      position: relative;
+      overflow: hidden;
+    }
+    .login-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, #0284c7, #38bdf8, #10b981);
+    }
+    .badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+      color: white;
+      letter-spacing: 0.8px;
+      display: inline-block;
+      margin-bottom: 12px;
+      box-shadow: 0 0 12px rgba(2, 132, 199, 0.4);
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 6px;
+      color: #ffffff;
+    }
+    p {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+    .input-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #cbd5e1;
+      margin-bottom: 8px;
+    }
+    input[type="password"] {
+      width: 100%;
+      background: #060b16;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: #ffffff;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: all 0.2s;
+    }
+    input[type="password"]:focus {
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+    }
+    button.btn-login {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+      border: 1px solid #38bdf8;
+      border-radius: 10px;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 14px rgba(2, 132, 199, 0.4);
+      transition: all 0.15s ease;
+    }
+    button.btn-login:hover {
+      background: #0284c7;
+      box-shadow: 0 6px 18px rgba(56, 189, 248, 0.5);
+    }
+    button.btn-login:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .error-msg {
+      background: #450a0a;
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      margin-bottom: 18px;
+      display: none;
+    }
+    .footer-note {
+      text-align: center;
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 20px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <span class="badge">SECURED CONSOLE</span>
+    <h1>Ultra Ops Console</h1>
+    <p>Protected by cryptographic HTTP session authentication and brute-force prevention.</p>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <form onsubmit="handleLogin(event)">
+      <div class="input-group">
+        <label for="password">Master Access Password</label>
+        <input type="password" id="password" placeholder="••••••••••••" autofocus required>
+      </div>
+
+      <button type="submit" class="btn-login" id="loginBtn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Authenticate & Enter
+      </button>
+    </form>
+
+    <div class="footer-note">
+      🔒 12-Hour Session • Zero Unauthorized Access
+    </div>
+  </div>
+
+  <script>
+    async function handleLogin(e) {
+      e.preventDefault();
+      const pw = document.getElementById('password').value;
+      const btn = document.getElementById('loginBtn');
+      const errBox = document.getElementById('errorMsg');
+
+      errBox.style.display = 'none';
+      btn.disabled = true;
+      btn.innerHTML = 'Verifying...';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw })
+        });
+        const data = await res.json();
+        if (data.success) {
+          // Success! Reload page to enter dashboard
+          window.location.reload();
+        } else {
+          errBox.innerText = data.message || 'Invalid password.';
+          errBox.style.display = 'block';
+          btn.disabled = false;
+          btn.innerHTML = 'Authenticate & Enter';
+        }
+      } catch (err) {
+        errBox.innerText = 'Connection error: ' + err.message;
+        errBox.style.display = 'block';
+        btn.disabled = false;
+        btn.innerHTML = 'Authenticate & Enter';
+      }
+    }
+  </script>
+</body>
+</html>`;
+}
+
+app.get('/live', requireUltraAuth, (req, res) => {
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -995,6 +1348,10 @@ app.get('/live', (req, res) => {
       <button class="btn btn-purple" onclick="sendCustomAlert()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Send Test WhatsApp
+      </button>
+      <button class="btn btn-danger" onclick="logoutSession()" title="Lock Console & Invalidate Session">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Lock Console
       </button>
     </div>
   </div>
@@ -1513,6 +1870,17 @@ app.get('/live', (req, res) => {
         clearTerminal();
       } catch (err) {
         alert('Failed to clear logs: ' + err.message);
+      }
+    }
+
+    
+    async function logoutSession() {
+      if (!confirm('Lock console and end your session?')) return;
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+        window.location.reload();
+      } catch (err) {
+        alert('Logout error: ' + err.message);
       }
     }
 
