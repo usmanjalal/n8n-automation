@@ -469,7 +469,7 @@ app.post('/api/save-cookies', (req, res) => {
 
 // API to get full audit logs
 // Proxy health check for cloud n8n
-app.get(requireUltraAuth, '/api/n8n/health', async (req, res) => {
+app.get('/api/n8n/health', requireUltraAuth, async (req, res) => {
   const n8nUrl = process.env.N8N_URL || 'https://n8n-server-lp44.onrender.com';
   try {
     const controller = new AbortController();
@@ -483,7 +483,7 @@ app.get(requireUltraAuth, '/api/n8n/health', async (req, res) => {
   }
 });
 
-app.get(requireUltraAuth, '/api/telemetry/logs', (req, res) => {
+app.get('/api/telemetry/logs', requireUltraAuth, (req, res) => {
   res.json({
     totalLogs: AUDIT_LOGS.length,
     pendingAlertsCount: pendingAlerts.length,
@@ -572,7 +572,7 @@ app.post('/api/pending-alerts/ack', (req, res) => {
 });
 
 // Delete specific alert from queue
-app.post(requireUltraAuth, '/api/pending-alerts/delete', (req, res) => {
+app.post('/api/pending-alerts/delete', requireUltraAuth, (req, res) => {
   const { id } = req.body;
   const idx = pendingAlerts.findIndex(a => a.id === id);
   if (idx !== -1) {
@@ -585,7 +585,7 @@ app.post(requireUltraAuth, '/api/pending-alerts/delete', (req, res) => {
 });
 
 // Clear entire pending alert queue
-app.post(requireUltraAuth, '/api/pending-alerts/clear', (req, res) => {
+app.post('/api/pending-alerts/clear', requireUltraAuth, (req, res) => {
   const count = pendingAlerts.length;
   pendingAlerts.length = 0;
   logEvent('user', 'WARN', `Cleared ${count} pending alert(s) from queue`);
@@ -593,7 +593,7 @@ app.post(requireUltraAuth, '/api/pending-alerts/clear', (req, res) => {
 });
 
 // Clear telemetry log buffer
-app.post(requireUltraAuth, '/api/telemetry/clear', (req, res) => {
+app.post('/api/telemetry/clear', requireUltraAuth, (req, res) => {
   AUDIT_LOGS.length = 0;
   logEvent('user', 'INFO', 'Telemetry log buffer cleared');
   res.json({ success: true });
