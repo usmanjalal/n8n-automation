@@ -496,13 +496,22 @@ app.get('/api/n8n/health', requireUltraAuth, async (req, res) => {
   const n8nUrl = process.env.N8N_URL || 'https://n8n-server-lp44.onrender.com';
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 8000);
     const r = await fetch(`${n8nUrl}/healthz`, { signal: controller.signal });
     clearTimeout(timeout);
     const data = await r.json().catch(() => ({}));
     res.json({ online: r.ok, url: n8nUrl, status: r.status, data });
   } catch (err) {
-    res.json({ online: false, url: n8nUrl, error: err.message });
+    // Retry once with root or 10s if free tier instance was spinning up
+    try {
+      const controller2 = new AbortController();
+      const timeout2 = setTimeout(() => controller2.abort(), 8000);
+      const r2 = await fetch(`${n8nUrl}/`, { signal: controller2.signal });
+      clearTimeout(timeout2);
+      res.json({ online: r2.status < 500, url: n8nUrl, status: r2.status });
+    } catch (err2) {
+      res.json({ online: false, url: n8nUrl, error: err.message || err2.message });
+    }
   }
 });
 
