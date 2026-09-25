@@ -1537,7 +1537,7 @@ app.get('/live', requireUltraAuth, (req, res) => {
           <span>Facebook 48h Monitor & WhatsApp Web Bridge</span>
           <span class="pulse-dot"></span>
         </h1>
-        <div style="font-size: 11.5px; color: var(--text-faint);">Real-time bi-directional telemetry across n8n, Scraper Microservice, and WhatsApp Web DOM</div>
+        <div style="font-size: 11.5px; color: var(--text-faint);">Autonomous 10 AM PKT Inactivity Engine • Microservice Hub & WhatsApp Web Telemetry</div>
       </div>
     </div>
     <div class="top-actions">
@@ -1601,47 +1601,28 @@ app.get('/live', requireUltraAuth, (req, res) => {
       </div>
     </div>
 
-    <div class="topology-grid">
+    <div class="topology-grid" style="grid-template-columns: 1fr 40px 1fr 40px 1fr;">
       
-      <!-- Node 1: Cloud n8n Workflow Server -->
-      <div class="topo-node" id="topoN8n">
-        <div class="topo-node-header">
-          <div class="topo-node-name">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-            n8n Cloud Engine
-          </div>
-          <span class="topo-status-pill pill-cyan" id="topoN8nPill">CHECKING</span>
-        </div>
-        <div class="topo-node-meta" id="topoN8nMeta">Workflow: 10 AM PKT / Webhook</div>
-        <div class="topo-node-endpoint">n8n-server-lp44.onrender.com</div>
-      </div>
-
-      <!-- Arrow 1 -->
-      <div class="topo-arrow active">
-        <span class="topo-arrow-label">POST /api/fb-check-all</span>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-      </div>
-
-      <!-- Node 2: Scraper Microservice (This Hub) -->
+      <!-- Node 1: Autonomous Scraper Hub & 10 AM PKT Scheduler -->
       <div class="topo-node active" id="topoScraper">
         <div class="topo-node-header">
           <div class="topo-node-name">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-            Scraper & Bridge Hub
+            Autonomous Engine & 10 AM Scheduler
           </div>
           <span class="topo-status-pill pill-green">LIVE HUB</span>
         </div>
-        <div class="topo-node-meta" id="topoScraperMeta">Puppeteer Stealth • Port 10000</div>
+        <div class="topo-node-meta" id="topoScraperMeta">Puppeteer Stealth • 10 AM PKT Cron Built-in</div>
         <div class="topo-node-endpoint">fb-scraper-service.onrender.com</div>
       </div>
 
-      <!-- Arrow 2 -->
+      <!-- Arrow 1 -->
       <div class="topo-arrow active" id="topoArrowQueue">
         <span class="topo-arrow-label" id="topoArrowQueueLabel">GET /api/pending-alerts</span>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
       </div>
 
-      <!-- Node 3: WhatsApp Web Extension -->
+      <!-- Node 2: WhatsApp Web Extension -->
       <div class="topo-node" id="topoExt">
         <div class="topo-node-header">
           <div class="topo-node-name">
@@ -1654,13 +1635,13 @@ app.get('/live', requireUltraAuth, (req, res) => {
         <div class="topo-node-endpoint" id="topoExtEndpoint">Polling Cloud Service</div>
       </div>
 
-      <!-- Arrow 3 -->
+      <!-- Arrow 2 -->
       <div class="topo-arrow active">
         <span class="topo-arrow-label">DOM Automation</span>
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
       </div>
 
-      <!-- Node 4: WhatsApp Group Recipient -->
+      <!-- Node 3: WhatsApp Group Recipient -->
       <div class="topo-node" id="topoTarget">
         <div class="topo-node-header">
           <div class="topo-node-name">
@@ -1690,7 +1671,7 @@ app.get('/live', requireUltraAuth, (req, res) => {
 
       <div class="terminal-filters">
         <button class="terminal-filter-btn active" onclick="setTerminalFilter('ALL', this)">ALL</button>
-        <button class="terminal-filter-btn" onclick="setTerminalFilter('n8n', this)">n8n</button>
+        <button class="terminal-filter-btn" onclick="setTerminalFilter('scheduler', this)">Scheduler</button>
         <button class="terminal-filter-btn" onclick="setTerminalFilter('whatsapp_extension', this)">WhatsApp Extension</button>
         <button class="terminal-filter-btn" onclick="setTerminalFilter('microservice', this)">Microservice</button>
         
@@ -2157,40 +2138,7 @@ app.get('/live', requireUltraAuth, (req, res) => {
       seenTerminalIds.clear();
     }
 
-    
-    let lastN8nCheck = 0;
-    let n8nIsOnline = true;
-
-    async function checkN8nHealth() {
-      const now = Date.now();
-      if (now - lastN8nCheck < 5000) return;
-      lastN8nCheck = now;
-      try {
-        const res = await fetch('/api/n8n/health');
-        const data = await res.json();
-        n8nIsOnline = Boolean(data.online);
-        const node = document.getElementById('topoN8n');
-        const pill = document.getElementById('topoN8nPill');
-        const meta = document.getElementById('topoN8nMeta');
-        if (n8nIsOnline) {
-          node.className = 'topo-node active';
-          pill.className = 'topo-status-pill pill-green';
-          pill.innerText = 'ONLINE (200)';
-          meta.innerText = 'Render Cloud Workflow Ready';
-        } else {
-          node.className = 'topo-node disconnected';
-          pill.className = 'topo-status-pill pill-red';
-          pill.innerText = 'OFFLINE';
-          meta.innerText = data.error || 'Connection Failed';
-        }
-      } catch {
-        // silent
-      }
-    }
-
     function updateTopologyStatus(data) {
-      checkN8nHealth();
-
       // Extension Node
       const extLogs = allLogsCache.filter(l => l.source === 'whatsapp_extension');
       const extNode = document.getElementById('topoExt');
