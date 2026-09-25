@@ -135,8 +135,13 @@ async function fetchLatestPostPuppeteer(handle) {
     try {
       logEvent('microservice', 'INFO', `Launching Puppeteer for ${displayName}...`, { handle: cleanHandle, url: pageUrl });
 
+      const chromeExecutable = process.env.PUPPETEER_EXECUTABLE_PATH || 
+        (fs.existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : 
+        (fs.existsSync('/usr/bin/chromium-browser') ? '/usr/bin/chromium-browser' : undefined));
+
       browser = await puppeteer.launch({
         headless: 'new',
+        executablePath: chromeExecutable,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
