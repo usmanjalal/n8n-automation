@@ -248,6 +248,17 @@ async function fetchLatestPostPuppeteer(handle) {
       await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1280, height: 800 });
 
+      // Ultra Speed Optimization: Block heavy media/fonts/images
+      await page.setRequestInterception(true);
+      page.on('request', req => {
+        const type = req.resourceType();
+        if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
       // Load authenticated cookies if available
       if (fs.existsSync(COOKIES_PATH)) {
         try {
@@ -271,8 +282,8 @@ async function fetchLatestPostPuppeteer(handle) {
         }
       }
 
-      // Navigate to Facebook Posts page
-      await page.goto(pageUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      // Navigate to Facebook Posts page (fast domcontentloaded with 12s timeout)
+      await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
 
       // Extract post timestamp and content from Facebook DOM
       const extracted = await page.evaluate(() => {
@@ -1798,46 +1809,101 @@ app.get('/live', requireUltraAuth, (req, res) => {
       }).join('');
     }
 
-    // Audit All Facebook Pages
+    // Monitored Facebook pages definition
+    const MONITORED_PAGES = [
+      { handle: 'therepairpros', name: 'The Repair Pros' },
+      { handle: 'thebakerycafepk', name: 'The Bakery Cafe PK' },
+      { handle: 'alifschoolandcollege', name: 'Alif School & Girls College' },
+      { handle: 'alifdegreecollege', name: 'Alif Degree College' },
+      { handle: 'islepk', name: 'ISLE PK' },
+      { handle: 'blossomspreschool', name: 'Blossoms Pre-School' },
+      { handle: 'thebritishschoolmardan', name: 'The British School Mardan' },
+      { handle: 'basmaemaargroup', name: 'Basma Emaar Group' }
+    ];
+
+    function renderPageCard(p, isAuditing = false) {
+      if (isAuditing) {
+        return '<div class="fb-page-card" id="card_' + p.handle + '" style="border-color: #38bdf8;">' +
+          '<div class="fb-page-header">' +
+            '<span class="fb-page-name">' + p.name + '</span>' +
+            '<span class="status-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">Auditing...</span>' +
+          '</div>' +
+          '<div style="font-size: 11px; color: #64748b; font-family: monospace;">@' + p.handle + '</div>' +
+          '<div style="font-size: 11px; color: #38bdf8; margin-top: 6px;">Fetching latest post timestamp via Puppeteer...</div>' +
+        '</div>';
+      }
+
+      const hoursAgo = p.inactiveHours !== undefined ? p.inactiveHours : Math.round((Date.now() - new Date(p.last_post_iso || p.lastPostDate).getTime()) / (1000 * 60 * 60));
+      const isInactive = p.isInactive !== undefined ? p.isInactive : (hoursAgo >= 48);
+      const badgeClass = isInactive ? 'badge-inactive' : 'badge-active';
+      const badgeText = isInactive ? 'Inactive (' + hoursAgo + 'h)' : 'Active (' + hoursAgo + 'h)';
+      const snippet = p.lastPostContent ? '<div style="font-size: 11px; color: #cbd5e1; background: #070d19; padding: 4px 6px; border-radius: 4px; margin-top: 4px; font-style: italic;">“' + p.lastPostContent + '”</div>' : '';
+      const methodTag = p.scrapeMethod ? '<span style="font-size: 9px; padding: 1px 4px; background: #1e293b; color: #94a3b8; border-radius: 3px;">' + p.scrapeMethod + '</span>' : '';
+
+      return '<div class="fb-page-card" id="card_' + (p.page || p.handle) + '">' +
+        '<div class="fb-page-header">' +
+          '<span class="fb-page-name">' + (p.page_name || p.name) + '</span>' +
+          '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span>' +
+        '</div>' +
+        '<div style="font-size: 11px; color: #64748b; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">@' + (p.page || p.handle) + ' ' + methodTag + '</div>' +
+        '<div style="font-size: 11px; color: #94a3b8;">Last post: ' + new Date(p.last_post_iso || p.lastPostDate).toLocaleString() + '</div>' +
+        snippet +
+        '<div style="margin-top: 4px;">' +
+          '<a href="' + (p.post_url || 'https://www.facebook.com/' + (p.page || p.handle) + '/posts/') + '" target="_blank" style="font-size: 11px; color: #38bdf8; text-decoration: none;">View Page ↗</a>' +
+        '</div>' +
+      '</div>';
+    }
+
+    // Progressive Audit All Facebook Pages (Prevents Edge Proxy Timeouts)
     async function auditAllPages() {
       const btn = document.getElementById('btnAuditAll');
       btn.disabled = true;
-      btn.innerHTML = 'Auditing 8 Pages...';
       const container = document.getElementById('fbPagesGrid');
-      container.innerHTML = '<div style="color: #38bdf8; padding: 12px;">Auditing latest post timestamps across all 8 Facebook pages...</div>';
 
-      try {
-        const res = await fetch('/api/fb-check-all', { method: 'POST' });
-        const data = await res.json();
-        
-        container.innerHTML = data.results.map(p => {
-          const hoursAgo = p.inactiveHours !== undefined ? p.inactiveHours : Math.round((Date.now() - new Date(p.last_post_iso).getTime()) / (1000 * 60 * 60));
-          const isInactive = p.isInactive !== undefined ? p.isInactive : (hoursAgo >= 48);
-          const badgeClass = isInactive ? 'badge-inactive' : 'badge-active';
-          const badgeText = isInactive ? 'Inactive (' + hoursAgo + 'h)' : 'Active (' + hoursAgo + 'h)';
-          const snippet = p.lastPostContent ? '<div style="font-size: 11px; color: #cbd5e1; background: #070d19; padding: 4px 6px; border-radius: 4px; margin-top: 4px; font-style: italic;">“' + p.lastPostContent + '”</div>' : '';
-          const methodTag = p.scrapeMethod ? '<span style="font-size: 9px; padding: 1px 4px; background: #1e293b; color: #94a3b8; border-radius: 3px;">' + p.scrapeMethod + '</span>' : '';
+      // Initialize all cards with loading skeleton state
+      container.innerHTML = MONITORED_PAGES.map(p => renderPageCard(p, true)).join('');
 
-          return '<div class="fb-page-card">' +
-            '<div class="fb-page-header">' +
-              '<span class="fb-page-name">' + p.page_name + '</span>' +
-              '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span>' +
-            '</div>' +
-            '<div style="font-size: 11px; color: #64748b; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">@' + p.page + ' ' + methodTag + '</div>' +
-            '<div style="font-size: 11px; color: #94a3b8;">Last post: ' + new Date(p.last_post_iso).toLocaleString() + '</div>' +
-            snippet +
-            '<div style="margin-top: 4px;">' +
-              '<a href="' + p.post_url + '" target="_blank" style="font-size: 11px; color: #38bdf8; text-decoration: none;">View Page ↗</a>' +
-            '</div>' +
-          '</div>';
-        }).join('');
+      let completedCount = 0;
+      btn.innerHTML = 'Auditing 0/' + MONITORED_PAGES.length + '...';
 
-      } catch (err) {
-        container.innerHTML = '<div style="color: #ef4444; padding: 12px;">Audit failed: ' + err.message + '</div>';
-      } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg> Audit All 8 Pages Now';
+      // Audit pages in parallel batches of 2 to balance speed and Render memory
+      const batchSize = 2;
+      for (let i = 0; i < MONITORED_PAGES.length; i += batchSize) {
+        const batch = MONITORED_PAGES.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (pageInfo) => {
+          const cardEl = document.getElementById('card_' + pageInfo.handle);
+          try {
+            const res = await fetch('/api/fb-post/' + pageInfo.handle);
+            if (!res.ok) {
+              const errText = await res.text();
+              throw new Error('HTTP ' + res.status + ': ' + errText.slice(0, 80));
+            }
+            const data = await res.json();
+            if (cardEl) {
+              cardEl.outerHTML = renderPageCard({
+                ...data,
+                handle: pageInfo.handle,
+                name: pageInfo.name
+              });
+            }
+          } catch (err) {
+            if (cardEl) {
+              cardEl.innerHTML = '<div class="fb-page-header">' +
+                '<span class="fb-page-name">' + pageInfo.name + '</span>' +
+                '<span class="status-badge badge-inactive">Audit Error</span>' +
+              '</div>' +
+              '<div style="font-size: 11px; color: #64748b; font-family: monospace;">@' + pageInfo.handle + '</div>' +
+              '<div style="font-size: 11px; color: #ef4444; margin-top: 4px;">' + err.message + '</div>';
+            }
+          } finally {
+            completedCount++;
+            btn.innerHTML = 'Auditing ' + completedCount + '/' + MONITORED_PAGES.length + '...';
+          }
+        }));
       }
+
+      btn.disabled = false;
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg> Audit All 8 Pages Now';
     }
 
     async function triggerWorkflow() {
